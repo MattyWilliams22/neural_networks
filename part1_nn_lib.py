@@ -185,10 +185,7 @@ class ReluLayer(Layer):
         #######################################################################
         self._cache_current = x
 
-        if x > 0:
-            return x
-        else:
-            return np.zeros_like(x)
+        return np.maximum(0, x)
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -213,10 +210,9 @@ class ReluLayer(Layer):
         #######################################################################
         x = self._cache_current
 
-        if x > 0:
-            return x
-        else:
-            return 0
+        grad_x = grad_z * (x > 0).astype(float)
+
+        return grad_x
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -242,8 +238,8 @@ class LinearLayer(Layer):
         #######################################################################
         #                       ** START OF YOUR CODE **
         #######################################################################
-        self._W = None
-        self._b = None
+        self._W = xavier_init((n_in, n_out))
+        self._b = np.zeros((1, n_out))
 
         self._cache_current = None
         self._grad_W_current = None
@@ -271,7 +267,7 @@ class LinearLayer(Layer):
         #######################################################################
         self._cache_current = x
 
-        return self._W @ x + self._b
+        return x @ self._W + self._b
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -295,7 +291,7 @@ class LinearLayer(Layer):
         #                       ** START OF YOUR CODE **
         #######################################################################
         self._grad_W_current = self._cache_current.T @ grad_z
-        self._grad_b_current = grad_z.sum(axis=0)
+        self._grad_b_current = grad_z.sum(axis=0, keepdims=True)
 
         return grad_z @ self._W.T
 
