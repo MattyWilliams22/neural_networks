@@ -490,7 +490,12 @@ class Trainer(object):
         #######################################################################
         #                       ** START OF YOUR CODE **
         #######################################################################
-        self._loss_layer = None
+        if loss_fun == 'mse':
+            self.loss_fun = MSELossLayer()
+        elif loss_fun == 'cross_entropy':
+            self.loss_fun = CrossEntropyLossLayer()
+        else:
+            raise ValueError(f"Unsupported loss function: {loss_fun}")
         #######################################################################
         #                       ** END OF YOUR CODE **
         #######################################################################
@@ -513,7 +518,8 @@ class Trainer(object):
         #######################################################################
         #                       ** START OF YOUR CODE **
         #######################################################################
-        pass
+        shuffle_idx = np.random.permutation(len(input_dataset))
+        return input_dataset[shuffle_idx], target_dataset[shuffle_idx]
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -542,7 +548,19 @@ class Trainer(object):
         #######################################################################
         #                       ** START OF YOUR CODE **
         #######################################################################
-        pass
+        for _ in range(self.nb_epoch):
+            if self.shuffle_flag:
+                input_dataset, target_dataset = self.shuffle(input_dataset, target_dataset)
+
+            for i in range(0, len(input_dataset), self.batch_size):
+                x_batch = input_dataset[i:i+self.batch_size]
+                y_batch = target_dataset[i:i+self.batch_size]
+
+                y_pred = self.network(x_batch)
+                loss = self.loss_fun.forward(y_pred, y_batch)
+                grad_z = self.loss_fun.backward()
+                self.network.backward(grad_z)
+                self.network.update_params(self.learning_rate)
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -565,7 +583,8 @@ class Trainer(object):
         #######################################################################
         #                       ** START OF YOUR CODE **
         #######################################################################
-        pass
+        y_pred = self.network(input_dataset)
+        return self.loss_fun.forward(y_pred, target_dataset)
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -590,7 +609,9 @@ class Preprocessor(object):
         #######################################################################
         #                       ** START OF YOUR CODE **
         #######################################################################
-        pass
+
+        self.min = data.min(axis=0)
+        self.max = data.max(axis=0)
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -609,8 +630,7 @@ class Preprocessor(object):
         #######################################################################
         #                       ** START OF YOUR CODE **
         #######################################################################
-        pass
-
+        return (data - self.min) / (self.max - self.min)
         #######################################################################
         #                       ** END OF YOUR CODE **
         #######################################################################
@@ -628,7 +648,7 @@ class Preprocessor(object):
         #######################################################################
         #                       ** START OF YOUR CODE **
         #######################################################################
-        pass
+        return data * (self.max - self.min) + self.min
 
         #######################################################################
         #                       ** END OF YOUR CODE **
