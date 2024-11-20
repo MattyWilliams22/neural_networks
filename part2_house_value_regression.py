@@ -1,14 +1,27 @@
 import torch
+import torch.nn as nn
 import pickle
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 
 CATEGORICAL_COLUMNS = ['ocean_proximity']
 TARGET_COLUMN = 'median_house_value'
 
 class Regressor():
 
-    def __init__(self, x, nb_epoch = 1000):
+    def __init__(
+        self, 
+        x, 
+        nb_epoch=1000,
+        learning_rate=0.001,
+        batch_size=16,
+        loss_fn=nn.MSELoss(),
+        hidden_layers=[1024, 1024, 1024],
+        activations=[nn.ReLU()] * 3
+        ):
         # You can add any input parameters you need
         # Remember to set them with a default value for LabTS tests
         """ 
@@ -27,19 +40,41 @@ class Regressor():
         #######################################################################
 
         # Replace this code with your own
+
+        # Scalers & encoder used when preprocessing
+        self.input_scaler = StandardScaler()
+        self.output_scaler = StandardScaler()
+        self.encoder = OneHotEncoder()
+
         X, _ = self._preprocessor(x, training = True)
+
         self.input_size = X.shape[1]
         self.output_size = 1
         self.nb_epoch = nb_epoch 
+        self.learning_rate = learning_rate
+        self.batch_size = batch_size
+        self.loss_fn = loss_fn
+        self.column_names = []
 
-        self.test_data = None
-        self.test_target = None
+        # Create model
+        layers = []
+        previous_layer = self.input_size
+        for neurons, activation in zip(hidden_layers, activations):
+            layers.append(nn.Linear(previous_layer, neurons))
+            layers.append(activation)
+            previous_layer = neurons
+        
+        layers.append(nn.Linear(hidden_layers[-1], self.output_size))
 
-        self.target_mean = 0
-        self.target_std = 1
+        self.model = nn.Sequential(*layers)
 
-        self.model = None
-        return
+
+        # Create Optimiser
+        self.optimiser = torch.optim.SGD(
+            self.model.parameters(), 
+            lr=self.learning_rate
+            )
+
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -71,44 +106,53 @@ class Regressor():
         # Replace this code with your own
         # Return preprocessed x and y, return None for y if it was None
         
-
+        # Fill missing values
         for col in df.columns.difference(CATEGORICAL_COLUMNS):
             df[col] = df[col].fillna(df[col].mean())
+        
+        # Get textual columns
+        textual_cols = df.select_dtypes(include=["object"]).columns
+        df_textual = df[textual_cols]
 
-        df = pd.get_dummies(df, columns=CATEGORICAL_COLUMNS)
-
-        # convert to numpy array
-        data = df.to_numpy().astype(np.float32)
-        if y:
-            target = y.to_numpy().astype(np.float32)
-            # normalize target
-            self.target_mean = target.mean()
-            self.target_std = target.std()
-            target = (target - self.target_mean) / self.target_std
-
-        # normalize data
-        data_mean = data.mean(axis=0)
-        data_std = data.std(axis=0)
-        data = (data - data_mean) / data_std
+        
+        # Get numerical columns
+        numerial_cols = df.select_dtypes(include=[np.number]).columns
+        df_numerical = df[numerial_cols]
 
         if training:
-        # split into train and test
-            np.random.seed(42)
-            indices = np.random.permutation(data.shape[0])
-            train_indices = indices[:int(0.8 * data.shape[0])]
-            test_indices = indices[int(0.8 * data.shape[0]):]
+            # One-hot encode textual values
+            df_textual = self.encoder.fit_transform(df_textual).toarray()
 
-            train_data = data[train_indices]
-            if y:
-                train_target = target[train_indices]
-                self.test_target = target[test_indices]
+            # Normalise numerical operations
+            df_numerical = self.input_scaler.fit_transform(df_numerical)
 
-            self.test_data = data[test_indices]
-
-            return torch.tensor(train_data), torch.tensor(train_target).unsqueeze(1)
-
+            # Preprocess (normalise) target dataset
+            if y is not None:
+                y = pd.DataFrame(self.output_scaler.fit_transform(y), 
+                columns=y.columns)
+        
         else:
-            return torch.tensor(data), None
+            # One-hot encode textual values
+            df_textual = self.encoder.transform(df_textual).toarray()
+
+            # Normalise numerical operations
+            df_numerical = self.input_scaler.transform(df_numerical)
+        
+        self.column_names = df.columns.tolist()
+        df = pd.DataFrame(
+            data = np.concatenate([df_numerical, df_textual], axis=1),
+            columns = numerial_cols.tolist()
+            + self.encoder.get_feature_names_out(textual_cols).tolist()
+        )
+
+        self.column_names = df.columns.tolist()
+
+        df_preprocessed = torch.tensor(df.values, dtype=torch.float32)
+        if y is not None:
+            return (df_preprocessed, torch.tensor(y.values, dtype=torch.float32))
+        else:
+            return (df_preprocessed, None)
+
         #######################################################################
         #                       ** END OF YOUR CODE **
         #######################################################################
@@ -132,41 +176,34 @@ class Regressor():
         #                       ** START OF YOUR CODE **
         #######################################################################
 
-        X, Y = self._preprocessor(x, y = y, training = True) # Do not forget4
-
-        model = torch.nn.Sequential(
-            torch.nn.Linear(self.input_size, 64),
-            torch.nn.ReLU(),
-            torch.nn.Linear(64, 32),
-            torch.nn.ReLU(),
-            torch.nn.Linear(32, 16),
-            torch.nn.ReLU(),
-            torch.nn.Linear(16, self.output_size)
-        )
-
-        loss_fn = torch.nn.MSELoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+        X, Y = self._preprocessor(x, y = y, training = True) # Do not forget
 
         for epoch in range(self.nb_epoch):
-            # Forward pass
-            y_pred = model(X)
+            # We decided to shuffle the data and split into batches
+            idxs = torch.randperm(X.size(0))
+            inp_batches = torch.split(X[idxs], self.batch_size)
+            out_batches = torch.split(Y[idxs], self.batch_size)
 
-            # Compute loss
-            loss = loss_fn(y_pred, Y)
+            for inp_batch, out_batch in zip(inp_batches, out_batches):
+                # Zero gradients
+                self.optimiser.zero_grad()
 
-            # Zero gradients
-            optimizer.zero_grad()
+                # Forward pass
+                y_pred = self.model(inp_batch)
 
-            # Backward pass
-            loss.backward()
+                # Compute loss
+                loss = self.loss_fn(y_pred, out_batch)
 
-            # Optimize
-            optimizer.step()
+                # Backward pass
+                loss.backward()
 
-            if epoch % 100 == 0:
-                print(f'Epoch {epoch}, loss {loss.item()}')
+                # Optimize (gradient descent step)
+                self.optimiser.step()
 
-        self.model = model
+            # if epoch % 100 == 0:
+            #     print(f'Epoch {epoch}, loss {loss.item()}')
+            print(f'Epoch {epoch}, loss {loss.item()}')
+
 
         return self
 
@@ -198,7 +235,7 @@ class Regressor():
             raise Exception("Model not trained")
         
         with torch.no_grad():
-            return self.model(X).numpy() * self.target_std + self.target_mean
+            return self.output_scaler.inverse_transform(self.model(X).detach().numpy())
         
 
         #######################################################################
@@ -229,8 +266,8 @@ class Regressor():
             raise Exception("Model not trained")
         
         with torch.no_grad():
-            Y_pred = self.model(X).numpy() * self.target_std + self.target_mean
-            return np.mean((Y_pred - self.test_target) ** 2)
+            Y_pred = self.predict(X)
+            return mean_squared_error(Y_pred, Y.values, squared=False)
 
         #######################################################################
         #                       ** END OF YOUR CODE **
@@ -259,7 +296,7 @@ def load_regressor():
 
 
 
-def perform_hyperparameter_search(): 
+def perform_hyperparameter_search(x_train, y_train, x_test, y_test): 
     # Ensure to add whatever inputs you deem necessary to this function
     """
     Performs a hyper-parameter for fine-tuning the regressor implemented 
@@ -276,8 +313,42 @@ def perform_hyperparameter_search():
     #######################################################################
     #                       ** START OF YOUR CODE **
     #######################################################################
+    import concurrent.futures
 
-    return  # Return the chosen hyper parameters
+    # Define hyper-parameter values to try
+    learning_rates = [0.001, 0.01, 0.1]
+    epochs = [200, 300, 400]
+
+    def train_with_params(params):
+        lr, nb_epoch = params
+        regressor = Regressor(
+            x_train,
+            nb_epoch = nb_epoch,
+            learning_rate = lr,
+            batch_size = 8,
+            loss_fn = nn.MSELoss(),
+            hidden_layers = [1024, 1024, 1024],
+            activations = [nn.ReLU()] * 3
+        )
+        regressor.fit(x_train, y_train)
+        error = regressor.score(x_test, y_test)
+        return lr, nb_epoch, error
+
+    # Try all param combos
+    param_combs = [(lr, nb_epoch) for lr in learning_rates for nb_epoch in epochs]
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        results = list(executor.map(train_with_params, param_combs))
+
+    optimal_params = None
+
+    lowest_error = float(inf)
+    for lr, nb_epoch, error in results:
+        if error < lowest_error:
+            lowest_error = error
+            optimal_params = lr, nb_epoch
+
+    return optimal_params
 
     #######################################################################
     #                       ** END OF YOUR CODE **
@@ -291,17 +362,26 @@ def example_main():
     # Use pandas to read CSV data as it contains various object types
     # Feel free to use another CSV reader tool
     # But remember that LabTS tests take Pandas DataFrame as inputs
-    data = pd.read_csv("housing.csv") 
+    data = pd.read_csv("housing.csv")
+
+    train, test = train_test_split(data, test_size=0.2)
 
     # Splitting input and output
-    x_train = data.loc[:, data.columns != output_label]
-    y_train = data.loc[:, [output_label]]
+    x_train = train.loc[:, train.columns != output_label]
+    y_train = train.loc[:, [output_label]]
 
     # Training
     # This example trains on the whole available dataset. 
     # You probably want to separate some held-out data 
     # to make sure the model isn't overfitting
-    regressor = Regressor(x_train, nb_epoch = 10)
+    regressor = Regressor(
+        x_train, 
+        learning_rate=0.1,
+        nb_epoch=300,
+        batch_size=8,
+        hidden_layers=[1024, 1024, 1024],
+        activations = [nn.ReLU()] * 3)
+
     regressor.fit(x_train, y_train)
     save_regressor(regressor)
 
@@ -312,4 +392,25 @@ def example_main():
 
 if __name__ == "__main__":
     example_main()
+
+
+
+    # output_label = TARGET_COLUMN
+
+    # # Use pandas to read CSV data as it contains various object types
+    # # Feel free to use another CSV reader tool
+    # # But remember that LabTS tests take Pandas DataFrame as inputs
+    # data = pd.read_csv("housing.csv")
+
+    # train, test = train_test_split(data, test_size=0.2)
+
+    # # Splitting input and output
+    # x_train = train.loc[:, train.columns != output_label]
+    # y_train = train.loc[:, [output_label]]
+
+
+    # x_test = test.loc[:, test.columns != output_label]
+    # y_test = test.loc[:, [output_label]]
+
+    # print(perform_hyperparameter_search(x_train, y_train, x_test, y_test))
 
