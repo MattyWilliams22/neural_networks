@@ -16,8 +16,11 @@ This project was developed as part of a group coursework during the autumn term 
 
 - **Python**: Programming language for implementation.
 - **NumPy**: For numerical computations.
+- **Pandas**: For data manipulation and analysis.
 - **Matplotlib**: For visualizing results.
 - **Scikit-learn**: For dataset preparation and evaluation.
+- **Scipy**: For scientific and mathematical functions.
+- **Torch**: For deep learning model implementation.
 
 ## Getting Started
 
